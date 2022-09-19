@@ -3,17 +3,18 @@ from tool.torch_utils import convert2cpu
 
 
 def parse_cfg(cfgfile):
+    '''解析cfg配置文件'''
     blocks = []
     fp = open(cfgfile, 'r')
     block = None
     line = fp.readline()
-    while line != '':
+    while line != '':  # 当还有内容时就继续读取
         line = line.rstrip()
-        if line == '' or line[0] == '#':
+        if line == '' or line[0] == '#':  # 空行或注释
             line = fp.readline()
             continue
         elif line[0] == '[':
-            if block:
+            if block:   # 将上个block保存
                 blocks.append(block)
             block = dict()
             block['type'] = line.lstrip('[').rstrip(']')
@@ -262,7 +263,7 @@ def save_fc(fp, fc_model):
 if __name__ == '__main__':
     import sys
 
-    blocks = parse_cfg('cfg/yolo.cfg')
+    blocks = parse_cfg(r'C:/Users/csw/Desktop/pytorch-YOLOv4/cfg/yolov4.cfg')
     if len(sys.argv) == 2:
         blocks = parse_cfg(sys.argv[1])
     print_cfg(blocks)

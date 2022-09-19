@@ -14,15 +14,16 @@ def sigmoid(x):
 
 
 def softmax(x):
+    # 减去最大值，免得数值溢出
     x = np.exp(x - np.expand_dims(np.max(x, axis=1), axis=1))
     x = x / np.expand_dims(x.sum(axis=1), axis=1)
     return x
 
 
 def bbox_iou(box1, box2, x1y1x2y2=True):
-    
-    # print('iou box1:', box1)
-    # print('iou box2:', box2)
+    # 两个检测框计算IOU
+    # print('iou box1:', box1) (4, )
+    # print('iou box2:', box2) (4, )
 
     if x1y1x2y2:
         mx = min(box1[0], box2[0])
@@ -59,14 +60,14 @@ def bbox_iou(box1, box2, x1y1x2y2=True):
 
 
 def nms_cpu(boxes, confs, nms_thresh=0.5, min_mode=False):
-    # print(boxes.shape)
+    # print(boxes.shape) (n, 4)
     x1 = boxes[:, 0]
     y1 = boxes[:, 1]
     x2 = boxes[:, 2]
     y2 = boxes[:, 3]
 
     areas = (x2 - x1) * (y2 - y1)
-    order = confs.argsort()[::-1]
+    order = confs.argsort()[::-1]  # confs降序排列的索引
 
     keep = []
     while order.size > 0:
@@ -207,7 +208,7 @@ def post_processing(img, conf_thresh, nms_thresh, output):
         l_max_conf = max_conf[i, argwhere]
         l_max_id = max_id[i, argwhere]
 
-        bboxes = []
+        bboxes = []  # 存放一张图片中所有留存检测框的信息
         # nms for each class
         for j in range(num_classes):
 

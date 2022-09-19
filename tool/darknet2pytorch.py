@@ -12,7 +12,7 @@ class Mish(torch.nn.Module):
         super().__init__()
 
     def forward(self, x):
-        x = x * (torch.tanh(torch.nn.functional.softplus(x)))
+        x = x * (torch.tanh(torch.nn.functional.softplus(x)))  # x * tanh( ln(1+e^x) )
         return x
 
 
@@ -24,6 +24,7 @@ class MaxPoolDark(nn.Module):
 
     def forward(self, x):
         '''
+        B, C, H, W = x.size()
         darknet output_size = (input_size + p - k) / s +1
         p : padding = k - 1
         k : size
@@ -31,31 +32,40 @@ class MaxPoolDark(nn.Module):
         torch output_size = (input_size + 2*p -k) / s +1
         p : padding = k//2
         '''
-        p = self.size // 2
+        p = self.size // 2  # 只要self.size为奇数，则下面的判断就会进入else
         if ((x.shape[2] - 1) // self.stride) != ((x.shape[2] + 2 * p - self.size) // self.stride):
-            padding1 = (self.size - 1) // 2
-            padding2 = padding1 + 1
+            padding1 = (self.size - 1) // 2  # padding_top
+            padding2 = padding1 + 1          # padding_bottom
         else:
-            padding1 = (self.size - 1) // 2
-            padding2 = padding1
+            padding1 = (self.size - 1) // 2  # padding_top
+            padding2 = padding1              # padding_bottom
         if ((x.shape[3] - 1) // self.stride) != ((x.shape[3] + 2 * p - self.size) // self.stride):
-            padding3 = (self.size - 1) // 2
-            padding4 = padding3 + 1
+            padding3 = (self.size - 1) // 2  # padding_left
+            padding4 = padding3 + 1          # padding_right
         else:
-            padding3 = (self.size - 1) // 2
-            padding4 = padding3
+            padding3 = (self.size - 1) // 2  # padding_left
+            padding4 = padding3              # padding_right
         x = F.max_pool2d(F.pad(x, (padding3, padding4, padding1, padding2), mode='replicate'),
                          self.size, stride=self.stride)
         return x
 
 
 class Upsample_expand(nn.Module):
+    '''
+    将B, C, H, W尺寸的图像上采样至B, C, H*s, W*s大小
+    例如   a   b
+          c   d
+    上采样至  a  a  b  b
+             a  a  b  b
+             c  c  d  d
+             c  c  d  d
+    '''
     def __init__(self, stride=2):
         super(Upsample_expand, self).__init__()
         self.stride = stride
 
     def forward(self, x):
-        assert (x.data.dim() == 4)
+        assert (x.data.dim() == 4)  # B, C, H, W = x.size()
         
         x = x.view(x.size(0), x.size(1), x.size(2), 1, x.size(3), 1).\
             expand(x.size(0), x.size(1), x.size(2), self.stride, x.size(3), self.stride).contiguous().\
@@ -65,6 +75,9 @@ class Upsample_expand(nn.Module):
 
 
 class Upsample_interpolate(nn.Module):
+    '''
+    从结果上看是等价于Upsample_expand
+    '''
     def __init__(self, stride):
         super(Upsample_interpolate, self).__init__()
         self.stride = stride
@@ -77,6 +90,10 @@ class Upsample_interpolate(nn.Module):
 
 
 class Reorg(nn.Module):
+    '''
+    实现了YOLOv2论文中的reorg操作：将每个 2 × 2 局部区域转化为 channel 维度，对于 26 × 26 × 512 的特征
+    图，经 passthrough 层处理之后就变成了 13 × 13 × 2048 的新特征图（特征图的大小降低 4 倍，而 channels 增加 4 倍）
+    '''
     def __init__(self, stride=2):
         super(Reorg, self).__init__()
         self.stride = stride
@@ -92,10 +109,10 @@ class Reorg(nn.Module):
         assert (W % stride == 0)
         ws = stride
         hs = stride
-        x = x.view(B, C, H / hs, hs, W / ws, ws).transpose(3, 4).contiguous()
-        x = x.view(B, C, H / hs * W / ws, hs * ws).transpose(2, 3).contiguous()
-        x = x.view(B, C, hs * ws, H / hs, W / ws).transpose(1, 2).contiguous()
-        x = x.view(B, hs * ws * C, H / hs, W / ws)
+        x = x.view(B, C, H // hs, hs, W // ws, ws).transpose(3, 4).contiguous()
+        x = x.view(B, C, H // hs * W // ws, hs * ws).transpose(2, 3).contiguous()
+        x = x.view(B, C, hs * ws, H // hs, W // ws).transpose(1, 2).contiguous()
+        x = x.view(B, hs * ws * C, H // hs, W // ws)
         return x
 
 
@@ -109,7 +126,9 @@ class GlobalAvgPool2d(nn.Module):
         H = x.data.size(2)
         W = x.data.size(3)
         x = F.avg_pool2d(x, (H, W))
+        print(x.size())
         x = x.view(N, C)
+        print(x.size())
         return x
 
 

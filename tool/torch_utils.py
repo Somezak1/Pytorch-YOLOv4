@@ -14,6 +14,19 @@ from tool import utils
 
 
 def bbox_ious(boxes1, boxes2, x1y1x2y2=True):
+    '''
+    :param boxes1: N个检测框的坐标
+        [[x1  ...  x1]
+         [y1  ...  y1]
+         [x2  ...  x2]
+         [y2  ...  y2]]
+    :param boxes2: N个检测框的坐标
+        [[x1  ...  x1]
+         [y1  ...  y1]
+         [x2  ...  x2]
+         [y2  ...  y2]]
+    boxes1和boxes2中的检测框一一对应，计算IOU
+    '''
     if x1y1x2y2:
         mx = torch.min(boxes1[0], boxes2[0])
         Mx = torch.max(boxes1[2], boxes2[2])
@@ -32,10 +45,17 @@ def bbox_ious(boxes1, boxes2, x1y1x2y2=True):
         h1 = boxes1[3]
         w2 = boxes2[2]
         h2 = boxes2[3]
-    uw = Mx - mx
-    uh = My - my
+    uw = Mx - mx  # 最小包围框的宽
+    uh = My - my  # 最小包围框的高
     cw = w1 + w2 - uw
     ch = h1 + h2 - uh
+    '''
+    cw = torch.tensor([1, -1, 1, -1])
+    ch = torch.tensor([1, 1, -1, -1])
+    ch <= 0  # tensor([False, False,  True,  True])
+    cw <= 0  # tensor([False,  True, False,  True])
+    mask     # tensor([False,  True,  True,  True])
+    '''
     mask = ((cw <= 0) + (ch <= 0) > 0)
     area1 = w1 * h1
     area2 = w2 * h2
@@ -53,8 +73,8 @@ def get_region_boxes(boxes_and_confs):
     confs_list = []
 
     for item in boxes_and_confs:
-        boxes_list.append(item[0])
-        confs_list.append(item[1])
+        boxes_list.append(item[0])  # item[0]: [batch, num1 / num2 / num3, 1, 4]
+        confs_list.append(item[1])  # item[1]: [batch, num1 / num2 / num3, num_classes]
 
     # boxes: [batch, num1 + num2 + num3, 1, 4]
     # confs: [batch, num1 + num2 + num3, num_classes]
@@ -79,9 +99,9 @@ def do_detect(model, img, conf_thresh, nms_thresh, use_cuda=1):
         t0 = time.time()
 
         if type(img) == np.ndarray and len(img.shape) == 3:  # cv2 image
-            img = torch.from_numpy(img.transpose(2, 0, 1)).float().div(255.0).unsqueeze(0)
+            img = torch.from_numpy(img.transpose(2, 0, 1)).float().div(255.0).unsqueeze(0)  # (1, C, H, W)
         elif type(img) == np.ndarray and len(img.shape) == 4:
-            img = torch.from_numpy(img.transpose(0, 3, 1, 2)).float().div(255.0)
+            img = torch.from_numpy(img.transpose(0, 3, 1, 2)).float().div(255.0)            # (1, C, H, W)
         else:
             print("unknow image type")
             exit(-1)

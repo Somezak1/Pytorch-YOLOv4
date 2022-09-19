@@ -156,7 +156,9 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
     # [ 2, 2, 1, num_classes, 2, 2, 1, num_classes, 2, 2, 1, num_classes ]
     # And then into
     # bxy = [ 6 ] bwh = [ 6 ] det_conf = [ 3 ] cls_conf = [ num_classes * 3 ]
+
     # batch = output.size(0)
+    # 255 = output.size(1)
     # H = output.size(2)
     # W = output.size(3)
 
@@ -169,10 +171,12 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
         begin = i * (5 + num_classes)
         end = (i + 1) * (5 + num_classes)
         
-        bxy_list.append(output[:, begin : begin + 2])
-        bwh_list.append(output[:, begin + 2 : begin + 4])
-        det_confs_list.append(output[:, begin + 4 : begin + 5])
-        cls_confs_list.append(output[:, begin + 5 : end])
+        bxy_list.append(output[:, begin : begin + 2])              # [batch, 2, H, W]
+        bwh_list.append(output[:, begin + 2 : begin + 4])          # [batch, 2, H, W]
+        det_confs_list.append(output[:, begin + 4 : begin + 5])    # [batch, 1, H, W]
+        cls_confs_list.append(output[:, begin + 5 : end])          # [batch, 80, H, W]
+
+    # output.size: [batch, num_anchors * (5 + num_classes), H, W]
 
     # Shape: [batch, num_anchors * 2, H, W]
     bxy = torch.cat(bxy_list, dim=1)
@@ -200,7 +204,17 @@ def yolo_forward_dynamic(output, conf_thresh, num_classes, anchors, num_anchors,
 
     # Prepare C-x, C-y, P-w, P-h (None of them are torch related)
     grid_x = np.expand_dims(np.expand_dims(np.expand_dims(np.linspace(0, output.size(3) - 1, output.size(3)), axis=0).repeat(output.size(2), 0), axis=0), axis=0)
+    # 0, 1, ..., W
+    # .
+    # .
+    # .
+    # 0, 1, ..., W
     grid_y = np.expand_dims(np.expand_dims(np.expand_dims(np.linspace(0, output.size(2) - 1, output.size(2)), axis=1).repeat(output.size(3), 1), axis=0), axis=0)
+    # 0, 0, ..., 0
+    # .
+    # .
+    # .
+    # H, H, ..., H
     # grid_x = torch.linspace(0, W - 1, W).reshape(1, 1, 1, W).repeat(1, 1, H, 1)
     # grid_y = torch.linspace(0, H - 1, H).reshape(1, 1, H, 1).repeat(1, 1, 1, W)
 
