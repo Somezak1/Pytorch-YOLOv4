@@ -22,6 +22,12 @@ from torch.utils.data.dataset import Dataset
 
 
 def rand_uniform_strong(min, max):
+    '''
+    在min和max之间均匀采样一个浮点数
+    :param min:
+    :param max:
+    :return:
+    '''
     if min > max:
         swap = min
         min = max
@@ -30,35 +36,41 @@ def rand_uniform_strong(min, max):
 
 
 def rand_scale(s):
+    # 一半几率返回1到s之间均匀采样的一个浮点数，一半几率返回该随机数的倒数
     scale = rand_uniform_strong(1, s)
     if random.randint(0, 1) % 2:
         return scale
     return 1. / scale
 
 
-def rand_precalc_random(min, max, random_part):
-    if max < min:
-        swap = min
-        min = max
-        max = swap
-    return (random_part * (max - min)) + min
-
-
 def fill_truth_detection(bboxes, num_boxes, classes, flip, dx, dy, sx, sy, net_w, net_h):
+    # 检测框坐标系转化、检测框裁切和过滤、检测框缩放、坐标翻转（如果图像水平翻转）
+
+    # 给定pleft,ptop,pright,pbottom，就可以得到由(pleft,ptop)和(W-pright,H-pbottom)两点所构成的方框
+    # 将原图中以原图左上点为坐标系原点的检测框坐标变换到，以(pleft,ptop)点为原点的坐标系下
+    # 因为方框与原图有交集，所以需要将原图中超出方框的检测框全部裁切掉
+    # 最后将原图落在方框内的图像resize到原图的尺寸
+    # 因此以方框左上点(pleft,ptop)为坐标系原点的检测框坐标同样也需要进行缩放
+    # 返回值：
+    #     bboxes：落在方框内，经过坐标系转化、检测框裁切、坐标系缩放的检测框坐标
+    #     min_w_h: 留存的bboxes中，宽高最小的值
     if bboxes.shape[0] == 0:
         return bboxes, 10000
     np.random.shuffle(bboxes)
-    bboxes[:, 0] -= dx
-    bboxes[:, 2] -= dx
-    bboxes[:, 1] -= dy
-    bboxes[:, 3] -= dy
+    # 所有检测框向x轴的负方向移动dx，向y轴的负方向移动dy，即将bboxes坐标的原点从图像左上角点转移到(dx, dy)点
+    bboxes[:, 0] -= dx  # x1
+    bboxes[:, 2] -= dx  # x2
+    bboxes[:, 1] -= dy  # y1
+    bboxes[:, 3] -= dy  # y2
 
+    # 这张图片中所有的检测框全部裁剪到0-sx，0-sy这个方形区间内
     bboxes[:, 0] = np.clip(bboxes[:, 0], 0, sx)
     bboxes[:, 2] = np.clip(bboxes[:, 2], 0, sx)
 
     bboxes[:, 1] = np.clip(bboxes[:, 1], 0, sy)
     bboxes[:, 3] = np.clip(bboxes[:, 3], 0, sy)
 
+    # 裁剪为一条线的检测框
     out_box = list(np.where(((bboxes[:, 1] == sy) & (bboxes[:, 3] == sy)) |
                             ((bboxes[:, 0] == sx) & (bboxes[:, 2] == sx)) |
                             ((bboxes[:, 1] == 0) & (bboxes[:, 3] == 0)) |
@@ -68,17 +80,19 @@ def fill_truth_detection(bboxes, num_boxes, classes, flip, dx, dy, sx, sy, net_w
         list_box.remove(i)
     bboxes = bboxes[list_box]
 
-    if bboxes.shape[0] == 0:
+    if bboxes.shape[0] == 0:  # 如果没有bbox了就结束
         return bboxes, 10000
 
+    # 类别标签符合要求的bboxes
     bboxes = bboxes[np.where((bboxes[:, 4] < classes) & (bboxes[:, 4] >= 0))[0]]
 
+    # 最大bboxes数量
     if bboxes.shape[0] > num_boxes:
         bboxes = bboxes[:num_boxes]
 
-    min_w_h = np.array([bboxes[:, 2] - bboxes[:, 0], bboxes[:, 3] - bboxes[:, 1]]).min()
+    min_w_h = np.array([bboxes[:, 2] - bboxes[:, 0], bboxes[:, 3] - bboxes[:, 1]]).min() # 所有检测框中宽/高最窄的值
 
-    bboxes[:, 0] *= (net_w / sx)
+    bboxes[:, 0] *= (net_w / sx)  # 将图像中宽sx，高sy的矩形图像缩放到原图大小，检测框也同步缩放
     bboxes[:, 2] *= (net_w / sx)
     bboxes[:, 1] *= (net_h / sy)
     bboxes[:, 3] *= (net_h / sy)
@@ -182,6 +196,11 @@ def image_data_augmentation(mat, w, h, pleft, ptop, swidth, sheight, flip, dhue,
 
 
 def filter_truth(bboxes, dx, dy, sx, sy, xd, yd):
+    # 将处理后原图的检测框挪到新图对应位置处时，检测框坐标的变换处理
+    # 先将检测框坐标转化到以(dx,dy)为原点的坐标系下
+    # 然后对落在(dx,dy)为左上角点，w=sx，h=sy矩形区域内的检测框进行裁剪和过滤
+    # 然后将(dx,dy)为左上角点，w=sx，h=sy矩形区域内的图像及检测框挪到新图像中去
+    # 此时需要再次将检测框坐标的原点转化到新图像的左上角点上
     bboxes[:, 0] -= dx
     bboxes[:, 2] -= dx
     bboxes[:, 1] -= dy
@@ -212,8 +231,11 @@ def filter_truth(bboxes, dx, dy, sx, sy, xd, yd):
 
 def blend_truth_mosaic(out_img, img, bboxes, w, h, cut_x, cut_y, i_mixup,
                        left_shift, right_shift, top_shift, bot_shift):
+    # 将处理后的图像及检测框坐标挪到新图的对应区域中去
+    # if pleft>0, left_shift=0, else left_shift = min(-缩放后的pleft, cut_x, w-cut_x)=-缩放后的pleft
     left_shift = min(left_shift, w - cut_x)
     top_shift = min(top_shift, h - cut_y)
+    # if pright>0, right_shift=0, else right_shift = min(-缩放后的pright, cut_x, w-cut_x)=-缩放后的pright
     right_shift = min(right_shift, cut_x)
     bot_shift = min(bot_shift, cut_y)
 
@@ -242,7 +264,7 @@ def draw_box(img, bboxes):
 class Yolo_dataset(Dataset):
     def __init__(self, label_path, cfg, train=True):
         super(Yolo_dataset, self).__init__()
-        if cfg.mixup == 2:
+        if cfg.mixup == 2:  # 3
             print("cutmix=1 - isn't supported for Detector")
             raise
         elif cfg.mixup == 2 and cfg.letter_box:
@@ -255,13 +277,13 @@ class Yolo_dataset(Dataset):
         truth = {}
         f = open(label_path, 'r', encoding='utf-8')
         for line in f.readlines():
-            data = line.split(" ")
+            data = line.split(" ")  # 图片名
             truth[data[0]] = []
             for i in data[1:]:
-                truth[data[0]].append([int(float(j)) for j in i.split(',')])
+                truth[data[0]].append([int(float(j)) for j in i.split(',')])  # 每一行都是x1,y1,x2,y2,class
 
-        self.truth = truth
-        self.imgs = list(self.truth.keys())
+        self.truth = truth  # 一个字典，键是图片名称，值是该图片对应的检测框标签，形式为[[x1,y1,x2,y2,class], [x1,y1,x2,y2,class], ...]
+        self.imgs = list(self.truth.keys())  # 图片名称列表
 
     def __len__(self):
         return len(self.truth.keys())
@@ -270,20 +292,18 @@ class Yolo_dataset(Dataset):
         if not self.train:
             return self._get_val_item(index)
         img_path = self.imgs[index]
-        bboxes = np.array(self.truth.get(img_path), dtype=np.float)
+        bboxes = np.array(self.truth.get(img_path), dtype=np.float) # 每一行都是x1,y1,x2,y2,class
         img_path = os.path.join(self.cfg.dataset_dir, img_path)
-        use_mixup = self.cfg.mixup
-        if random.randint(0, 1):
+        use_mixup = self.cfg.mixup  # 3
+        if random.randint(0, 1):  # 50%概率不使用mosaic
             use_mixup = 0
 
         if use_mixup == 3:
             min_offset = 0.2
-            cut_x = random.randint(int(self.cfg.w * min_offset), int(self.cfg.w * (1 - min_offset)))
-            cut_y = random.randint(int(self.cfg.h * min_offset), int(self.cfg.h * (1 - min_offset)))
+            cut_x = random.randint(int(self.cfg.w * min_offset), int(self.cfg.w * (1 - min_offset)))  # 在0.2W-0.8W中随机采样一个cut_x
+            cut_y = random.randint(int(self.cfg.h * min_offset), int(self.cfg.h * (1 - min_offset)))  # 在0.2H-0.8H中随机采样一个cut_y
 
-        r1, r2, r3, r4, r_scale = 0, 0, 0, 0, 0
         dhue, dsat, dexp, flip, blur = 0, 0, 0, 0, 0
-        gaussian_noise = 0
 
         out_img = np.zeros([self.cfg.h, self.cfg.w, 3])
         out_bboxes = []
@@ -298,20 +318,20 @@ class Yolo_dataset(Dataset):
             if img is None:
                 continue
             oh, ow, oc = img.shape
-            dh, dw, dc = np.array(np.array([oh, ow, oc]) * self.cfg.jitter, dtype=np.int)
+            dh, dw, dc = np.array(np.array([oh, ow, oc]) * self.cfg.jitter, dtype=np.int)  # array([121, 121,   0])
 
-            dhue = rand_uniform_strong(-self.cfg.hue, self.cfg.hue)
-            dsat = rand_scale(self.cfg.saturation)
-            dexp = rand_scale(self.cfg.exposure)
+            dhue = rand_uniform_strong(-self.cfg.hue, self.cfg.hue) # -0.1到0.1之间均匀采样一个随机数
+            dsat = rand_scale(self.cfg.saturation)  # 在1-1.5之间均匀采样一个随机数，一半几率取其倒数
+            dexp = rand_scale(self.cfg.exposure)    # 在1-1.5之间均匀采样一个随机数，一半几率取其倒数
 
-            pleft = random.randint(-dw, dw)
-            pright = random.randint(-dw, dw)
-            ptop = random.randint(-dh, dh)
-            pbot = random.randint(-dh, dh)
+            pleft = random.randint(-dw, dw)   # -121到121之间任取一个整数
+            pright = random.randint(-dw, dw)  # -121到121之间任取一个整数
+            ptop = random.randint(-dh, dh)    # -121到121之间任取一个整数
+            pbot = random.randint(-dh, dh)    # -121到121之间任取一个整数
 
-            flip = random.randint(0, 1) if self.cfg.flip else 0
+            flip = random.randint(0, 1) if self.cfg.flip else 0  # 0或1，即50%概率翻转
 
-            if (self.cfg.blur):
+            if (self.cfg.blur):  # 0
                 tmp_blur = random.randint(0, 2)  # 0 - disable, 1 - blur background, 2 - blur the whole image
                 if tmp_blur == 0:
                     blur = 0
@@ -320,12 +340,12 @@ class Yolo_dataset(Dataset):
                 else:
                     blur = self.cfg.blur
 
-            if self.cfg.gaussian and random.randint(0, 1):
+            if self.cfg.gaussian and random.randint(0, 1):  # 0
                 gaussian_noise = self.cfg.gaussian
             else:
                 gaussian_noise = 0
 
-            if self.cfg.letter_box:
+            if self.cfg.letter_box: # 0
                 img_ar = ow / oh
                 net_ar = self.cfg.w / self.cfg.h
                 result_ar = img_ar / net_ar
@@ -345,7 +365,7 @@ class Yolo_dataset(Dataset):
 
             swidth = ow - pleft - pright
             sheight = oh - ptop - pbot
-
+            # self.cfg.boxes    mosaic最大可以容忍的bboxes数量为60
             truth, min_w_h = fill_truth_detection(bboxes, self.cfg.boxes, self.cfg.classes, flip, pleft, ptop, swidth,
                                                   sheight, self.cfg.w, self.cfg.h)
             if (min_w_h / 8) < blur and blur > 1:  # disable blur if one of the objects is too small
@@ -370,9 +390,13 @@ class Yolo_dataset(Dataset):
                     pleft = pright
                     pright = tmp
 
+                # if pleft > 0, left_shift = 0
+                # else left_shift = min(cut_x, 缩放后的-pleft)
                 left_shift = int(min(cut_x, max(0, (-int(pleft) * self.cfg.w / swidth))))
                 top_shift = int(min(cut_y, max(0, (-int(ptop) * self.cfg.h / sheight))))
 
+                # if pright > 0, right_shift = 0
+                # else right_shift = min(608-cut_x, 缩放后的-pright)
                 right_shift = int(min((self.cfg.w - cut_x), max(0, (-int(pright) * self.cfg.w / swidth))))
                 bot_shift = int(min(self.cfg.h - cut_y, max(0, (-int(pbot) * self.cfg.h / sheight))))
 
@@ -387,8 +411,15 @@ class Yolo_dataset(Dataset):
         return out_img, out_bboxes1
 
     def _get_val_item(self, index):
-        """
-        """
+        '''
+        读取验证集的一张图片，并将其检测框转化为指定格式返回
+        :param index: 序号
+        :return:
+            img: rgb图像
+            target: 是一个字典，其中键"boxes"中储存着该图片的n个检测框，尺寸为(n,4)，形式为x1y1wh;
+                                  键"labels"中储存着该图片n个检测框的类别标签，尺寸为(n,)
+                                  键"area"中储存着该图片n个检测框的面积，尺寸为(n,)
+        '''
         img_path = self.imgs[index]
         bboxes_with_cls_id = np.array(self.truth.get(img_path), dtype=np.float)
         img = cv2.imread(os.path.join(self.cfg.dataset_dir, img_path))

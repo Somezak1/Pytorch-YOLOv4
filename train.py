@@ -65,13 +65,13 @@ def bboxes_iou(bboxes_a, bboxes_b, xyxy=True, GIoU=False, DIoU=False, CIoU=False
 
     if xyxy:
         # intersection top left
-        tl = torch.max(bboxes_a[:, None, :2], bboxes_b[:, :2])
+        tl = torch.max(bboxes_a[:, None, :2], bboxes_b[:, :2])  # (N, K, 2)
         # intersection bottom right
-        br = torch.min(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
+        br = torch.min(bboxes_a[:, None, 2:], bboxes_b[:, 2:])  # (N, K, 2)
         # convex (smallest enclosing box) top left and bottom right
         con_tl = torch.min(bboxes_a[:, None, :2], bboxes_b[:, :2])
         con_br = torch.max(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
-        # centerpoint distance squared
+        # centerpoint distance squared, 中心点距离的平方
         rho2 = ((bboxes_a[:, None, 0] + bboxes_a[:, None, 2]) - (bboxes_b[:, 0] + bboxes_b[:, 2])) ** 2 / 4 + (
                 (bboxes_a[:, None, 1] + bboxes_a[:, None, 3]) - (bboxes_b[:, 1] + bboxes_b[:, 3])) ** 2 / 4
 
@@ -80,8 +80,8 @@ def bboxes_iou(bboxes_a, bboxes_b, xyxy=True, GIoU=False, DIoU=False, CIoU=False
         w2 = bboxes_b[:, 2] - bboxes_b[:, 0]
         h2 = bboxes_b[:, 3] - bboxes_b[:, 1]
 
-        area_a = torch.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)
-        area_b = torch.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)
+        area_a = torch.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)  # (N, )
+        area_b = torch.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)  # (K, )
     else:
         # intersection top left
         tl = torch.max((bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
@@ -105,9 +105,9 @@ def bboxes_iou(bboxes_a, bboxes_b, xyxy=True, GIoU=False, DIoU=False, CIoU=False
 
         area_a = torch.prod(bboxes_a[:, 2:], 1)
         area_b = torch.prod(bboxes_b[:, 2:], 1)
-    en = (tl < br).type(tl.type()).prod(dim=2)
-    area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())
-    area_u = area_a[:, None] + area_b - area_i
+    en = (tl < br).type(tl.type()).prod(dim=2)  # (N, K)
+    area_i = torch.prod(br - tl, 2) * en  # * ((tl < br).all())  # (N, K)
+    area_u = area_a[:, None] + area_b - area_i  # (N, K)
     iou = area_i / area_u
 
     if GIoU or DIoU or CIoU:
@@ -145,17 +145,64 @@ class Yolo_loss(nn.Module):
         for i in range(3):
             all_anchors_grid = [(w / self.strides[i], h / self.strides[i]) for w, h in self.anchors]
             masked_anchors = np.array([all_anchors_grid[j] for j in self.anch_masks[i]], dtype=np.float32)
+            # i = 0  masked_anchors:  输出步幅为8时（输出尺寸76x76），先验框在输出特征图中的尺寸
+            # array([[1.5, 2.],
+            #        [2.375, 4.5],
+            #        [5., 3.5]], dtype=float32)
             ref_anchors = np.zeros((len(all_anchors_grid), 4), dtype=np.float32)
             ref_anchors[:, 2:] = np.array(all_anchors_grid, dtype=np.float32)
             ref_anchors = torch.from_numpy(ref_anchors)
+            # 输出步幅为8时（输出尺寸76x76），所有先验框在输出特征图中的尺寸（右边两列）
+            # array([[0., 0., 1.5, 2.],
+            #        [0., 0., 2.375, 4.5],
+            #        [0., 0., 5., 3.5],
+            #        [0., 0., 4.5, 9.375],
+            #        [0., 0., 9.5, 6.875],
+            #        [0., 0., 9., 18.25],
+            #        [0., 0., 17.75, 13.75],
+            #        [0., 0., 24., 30.375],
+            #        [0., 0., 57.375, 50.125]], dtype=float32)
+
             # calculate pred - xywh obj cls
-            fsize = image_size // self.strides[i]
+            fsize = image_size // self.strides[i]  # i=0 76
             grid_x = torch.arange(fsize, dtype=torch.float).repeat(batch, 3, fsize, 1).to(device)
+            # grid_x[0, 0]             grid_x shape [batch, 3, 76, 76]
+            # tensor([[0., 1., 2., ..., 75.],
+            #         [0., 1., 2., ..., 75.],
+            #         [0., 1., 2., ..., 75.],
+            #         [0., 1., 2., ..., 75.],
+            #         [0., 1., 2., ..., 75.]])
             grid_y = torch.arange(fsize, dtype=torch.float).repeat(batch, 3, fsize, 1).permute(0, 1, 3, 2).to(device)
+            # grid_y[0, 0]             grid_y shape [batch, 3, 76, 76]
+            # tensor([[0., 0., 0., 0., 0.],
+            #         [1., 1., 1., 1., 1.],
+            #         [2., 2., 2., 2., 2.],
+            #         [.., .., .., .., ..],
+            #         [75., 75., 75., 75., 75.]])
             anchor_w = torch.from_numpy(masked_anchors[:, 0]).repeat(batch, fsize, fsize, 1).permute(0, 3, 1, 2).to(
                 device)
+            # anchor_w  [batch_size, 3, fsize, fsize]
+            # anchor_w[0][0], anchor box的宽除以strides后得到的值
+            # tensor([[1.5000, 1.5000, ......, 1.5000, 1.5000],
+            #         [1.5000, 1.5000, ......, 1.5000, 1.5000],
+            #         [......, ......, ......, ......, ......],
+            #         [1.5000, 1.5000, ......, 1.5000, 1.5000],
+            #         [1.5000, 1.5000, ......, 1.5000, 1.5000]])
+            # anchor_w[0][1]
+            # tensor([[2.3750, 2.3750, ......, 2.3750, 2.3750],
+            #         [2.3750, 2.3750, ......, 2.3750, 2.3750],
+            #         [......, ......, ......, ......, ......],
+            #         [2.3750, 2.3750, ......, 2.3750, 2.3750],
+            #         [2.3750, 2.3750, ......, 2.3750, 2.3750]])
+            # anchor_w[0][2]
+            # tensor([[5., 5., .., 5., 5.],
+            #         [5., 5., .., 5., 5.],
+            #         [.., .., .., .., ..],
+            #         [5., 5., .., 5., 5.],
+            #         [5., 5., .., 5., 5.]])
             anchor_h = torch.from_numpy(masked_anchors[:, 1]).repeat(batch, fsize, fsize, 1).permute(0, 3, 1, 2).to(
                 device)
+            # 同anchor_w，只不过这里是anchor box的高除以strides后得到的矩阵
 
             self.masked_anchors.append(masked_anchors)
             self.ref_anchors.append(ref_anchors)
@@ -165,6 +212,8 @@ class Yolo_loss(nn.Module):
             self.anchor_h.append(anchor_h)
 
     def build_target(self, pred, labels, batchsize, fsize, n_ch, output_id):
+        # pred: [batchsize, 3, fsize, fsize, 4]
+        # labels(x1y1x2y2c): [batchsize, 60, 5]
         # target assignment
         tgt_mask = torch.zeros(batchsize, self.n_anchors, fsize, fsize, 4 + self.n_classes).to(device=self.device)
         obj_mask = torch.ones(batchsize, self.n_anchors, fsize, fsize).to(device=self.device)
@@ -172,52 +221,67 @@ class Yolo_loss(nn.Module):
         target = torch.zeros(batchsize, self.n_anchors, fsize, fsize, n_ch).to(self.device)
 
         # labels = labels.cpu().data
-        nlabel = (labels.sum(dim=2) > 0).sum(dim=1)  # number of objects
+        nlabel = (labels.sum(dim=2) > 0).sum(dim=1)  # number of objects, (batchsize, )  每张图片中有效检测框的数量
 
-        truth_x_all = (labels[:, :, 2] + labels[:, :, 0]) / (self.strides[output_id] * 2)
-        truth_y_all = (labels[:, :, 3] + labels[:, :, 1]) / (self.strides[output_id] * 2)
-        truth_w_all = (labels[:, :, 2] - labels[:, :, 0]) / self.strides[output_id]
-        truth_h_all = (labels[:, :, 3] - labels[:, :, 1]) / self.strides[output_id]
-        truth_i_all = truth_x_all.to(torch.int16).cpu().numpy()
+        truth_x_all = (labels[:, :, 2] + labels[:, :, 0]) / (self.strides[output_id] * 2) # gt中点的x坐标在输出特征图中的位置, [bs, 60]
+        truth_y_all = (labels[:, :, 3] + labels[:, :, 1]) / (self.strides[output_id] * 2) # gt中点的y坐标在输出特征图中的位置, [bs, 60]
+        truth_w_all = (labels[:, :, 2] - labels[:, :, 0]) / self.strides[output_id]  # gt的宽在输出特征图中的大小, [bs, 60]
+        truth_h_all = (labels[:, :, 3] - labels[:, :, 1]) / self.strides[output_id]  # gt的高在输出特征图中的大小, [bs, 60]
+        truth_i_all = truth_x_all.to(torch.int16).cpu().numpy()  # 向下取整
         truth_j_all = truth_y_all.to(torch.int16).cpu().numpy()
 
         for b in range(batchsize):
-            n = int(nlabel[b])
+            n = int(nlabel[b])  # 该图片所拥有的gt数量
             if n == 0:
                 continue
             truth_box = torch.zeros(n, 4).to(self.device)
-            truth_box[:n, 2] = truth_w_all[b, :n]
-            truth_box[:n, 3] = truth_h_all[b, :n]
-            truth_i = truth_i_all[b, :n]
-            truth_j = truth_j_all[b, :n]
+            truth_box[:n, 2] = truth_w_all[b, :n]  # [n, ]
+            truth_box[:n, 3] = truth_h_all[b, :n]  # [n, ]
+            truth_i = truth_i_all[b, :n]  # [n, ]
+            truth_j = truth_j_all[b, :n]  # [n, ]
 
             # calculate iou between truth and reference anchors
-            anchor_ious_all = bboxes_iou(truth_box.cpu(), self.ref_anchors[output_id], CIoU=True)
+            # truth_box：gt框在当前缩放比下的坐标及宽高
+            # self.ref_anchors[output_id] 先验框在当前缩放比下的坐标及尺寸
+            # array([[0., 0., 1.5, 2.],
+            #        [0., 0., 2.375, 4.5],
+            #        [0., 0., 5., 3.5],
+            #        [0., 0., 4.5, 9.375],
+            #        [0., 0., 9.5, 6.875],
+            #        [0., 0., 9., 18.25],
+            #        [0., 0., 17.75, 13.75],
+            #        [0., 0., 24., 30.375],
+            #        [0., 0., 57.375, 50.125]], dtype=float32)
+            # 注意：这里检测框的左上角都是00，并且下面bboxes_iou的计算采用的是xyxy方式
+            anchor_ious_all = bboxes_iou(truth_box.cpu(), self.ref_anchors[output_id], CIoU=True)  # (n, 9),
 
             # temp = bbox_iou(truth_box.cpu(), self.ref_anchors[output_id])
 
-            best_n_all = anchor_ious_all.argmax(dim=1)
+            best_n_all = anchor_ious_all.argmax(dim=1)  # (n, ) n个标签框中的每个标签框与哪个参考框最匹配
             best_n = best_n_all % 3
-            best_n_mask = ((best_n_all == self.anch_masks[output_id][0]) |
-                           (best_n_all == self.anch_masks[output_id][1]) |
+            best_n_mask = ((best_n_all == self.anch_masks[output_id][0]) |  # 为True则表明这个标签框负责由该尺寸特征图的第beat_n个检测框预测
+                           (best_n_all == self.anch_masks[output_id][1]) |  # 为False则表明这个标签框不由该尺寸特征图进行预测
                            (best_n_all == self.anch_masks[output_id][2]))
 
             if sum(best_n_mask) == 0:
                 continue
 
+            # truth_box中存放这该图片中n个检测框在当前特征图尺寸下的xywh
             truth_box[:n, 0] = truth_x_all[b, :n]
             truth_box[:n, 1] = truth_y_all[b, :n]
 
-            pred_ious = bboxes_iou(pred[b].view(-1, 4), truth_box, xyxy=False)
+            # 将该特征图中预测出来的所有预测框与所有gt框计算IOU
+            pred_ious = bboxes_iou(pred[b].view(-1, 4), truth_box, xyxy=False)  # pred: [batchsize, 3, fsize, fsize, 4]， truth_box：[n, 4]
+            # pred_ious  [3*fsize*fsize, n]
             pred_best_iou, _ = pred_ious.max(dim=1)
             pred_best_iou = (pred_best_iou > self.ignore_thre)
-            pred_best_iou = pred_best_iou.view(pred[b].shape[:3])
+            pred_best_iou = pred_best_iou.view(pred[b].shape[:3])  # [3, fsize, fsize]  指定位置处的那个预测框与gt的最大IOU是否大于阈值0.5
             # set mask to zero (ignore) if pred matches truth
-            obj_mask[b] = ~ pred_best_iou
+            obj_mask[b] = ~ pred_best_iou  # 若True 指定位置处的预测框与gt的最大IOU小于阈值0.5  若F，则最大IOU大于阈值0.5
 
-            for ti in range(best_n.shape[0]):
-                if best_n_mask[ti] == 1:
-                    i, j = truth_i[ti], truth_j[ti]
+            for ti in range(best_n.shape[0]):  # 遍历当前图片中的每个gt框
+                if best_n_mask[ti] == 1:  # 只有标签框与当前特征图对应的3个参考框匹配时
+                    i, j = truth_i[ti], truth_j[ti]  # 当前标签框的中心落在哪个格子
                     a = best_n[ti]
                     obj_mask[b, a, j, i] = 1
                     tgt_mask[b, a, j, i, :] = 1
@@ -234,34 +298,40 @@ class Yolo_loss(nn.Module):
 
     def forward(self, xin, labels=None):
         loss, loss_xy, loss_wh, loss_obj, loss_cls, loss_l2 = 0, 0, 0, 0, 0, 0
-        for output_id, output in enumerate(xin):
+        for output_id, output in enumerate(xin):  # output: [batchsize, 255, fsize, fsize]
             batchsize = output.shape[0]
             fsize = output.shape[2]
             n_ch = 5 + self.n_classes
 
             output = output.view(batchsize, self.n_anchors, n_ch, fsize, fsize)
-            output = output.permute(0, 1, 3, 4, 2)  # .contiguous()
+            output = output.permute(0, 1, 3, 4, 2)  # .contiguous()  # [batchsize, 3, fsize, fsize, 85]
 
-            # logistic activation for xy, obj, cls
+            # logistic activation for xy, obj, cls, [batchsize, 3, fsize, fsize, 83]，不对wh做sigmoid
             output[..., np.r_[:2, 4:n_ch]] = torch.sigmoid(output[..., np.r_[:2, 4:n_ch]])
 
-            pred = output[..., :4].clone()
-            pred[..., 0] += self.grid_x[output_id]
-            pred[..., 1] += self.grid_y[output_id]
-            pred[..., 2] = torch.exp(pred[..., 2]) * self.anchor_w[output_id]
-            pred[..., 3] = torch.exp(pred[..., 3]) * self.anchor_h[output_id]
+            pred = output[..., :4].clone()          # pred: [batchsize, 3, fsize, fsize, 4]
+            pred[..., 0] += self.grid_x[output_id]  # [batchsize, 3, fsize, fsize], sigmoid后的x加上全局x坐标, 预测框中心在fsize尺寸特征图中的位置，0-fsize
+            pred[..., 1] += self.grid_y[output_id]  # [batchsize, 3, fsize, fsize], sigmoid后的y加上全局y坐标, 预测框中心在fsize尺寸特征图中的位置，0-fsize
+            pred[..., 2] = torch.exp(pred[..., 2]) * self.anchor_w[output_id]  # [batchsize, 3, fsize, fsize]，在fsize尺寸特征图下预测框的高
+            pred[..., 3] = torch.exp(pred[..., 3]) * self.anchor_h[output_id]  # [batchsize, 3, fsize, fsize]
 
             obj_mask, tgt_mask, tgt_scale, target = self.build_target(pred, labels, batchsize, fsize, n_ch, output_id)
 
             # loss calculation
-            output[..., 4] *= obj_mask
-            output[..., np.r_[0:4, 5:n_ch]] *= tgt_mask
-            output[..., 2:4] *= tgt_scale
+            # output      [batchsize, 3, fsize, fsize, 85]
+            # target      [batchsize, 3, fsize, fsize, 85]
+            # obj_mask    [batchsize, 3, fsize, fsize]
+            # tgt_mask    [batchsize, 3, fsize, fsize, 84]
+            # tgt_scale   [batchsize, 3, fsize, fsize, 2]
+            output[..., 4] *= obj_mask  # (b, 3, f, f)
+            output[..., np.r_[0:4, 5:n_ch]] *= tgt_mask  # (b, 3, f, f, 84)
+            output[..., 2:4] *= tgt_scale  # (b, 3, f, f, 2)
 
             target[..., 4] *= obj_mask
             target[..., np.r_[0:4, 5:n_ch]] *= tgt_mask
             target[..., 2:4] *= tgt_scale
 
+            # target，output : [b, 3, f, f, 85]
             loss_xy += F.binary_cross_entropy(input=output[..., :2], target=target[..., :2],
                                               weight=tgt_scale * tgt_scale, reduction='sum')
             loss_wh += F.mse_loss(input=output[..., 2:4], target=target[..., 2:4], reduction='sum') / 2
@@ -328,11 +398,12 @@ def train(model, device, config, epochs=5, batch_size=1, save_cp=True, log_step=
 
     # learning rate setup
     def burnin_schedule(i):
-        if i < config.burn_in:
+        '相对原始学习率的系数'
+        if i < config.burn_in: # 1000
             factor = pow(i / config.burn_in, 4)
-        elif i < config.steps[0]:
+        elif i < config.steps[0]: # 40W
             factor = 1.0
-        elif i < config.steps[1]:
+        elif i < config.steps[1]: # 45W
             factor = 0.1
         else:
             factor = 0.01
@@ -562,6 +633,8 @@ def get_args(**kwargs):
     # for k in args.keys():
     #     cfg[k] = args.get(k)
     cfg.update(args)
+    # 如果程序运行时命令行指定的参数中有参数和配置文件cfg中的重合，则用命令行中的新参数替换cfg中的旧参数
+    # 如果不重合，则按配置文件中的参数来
 
     return edict(cfg)
 
